@@ -11,49 +11,52 @@ model PrisonPatrollingGame
 global {
 	int env_length <- 200;
 	
-	int nb_obstacles <- 15 parameter: true;
-	int nb_coinboxes <- 20 parameter: true min:0 max: 50;
-	int max_coins_in_coinbox <- 5 parameter: true min: 1 max: 10;
+	int nb_obstacles <- 15;
+	int nb_coinboxes <- 20;
+	int max_coins_in_coinbox <- 3;
 	
-	int nb_workers <- 5 parameter:true;
-	float worker_trust_treshold <- 0.4 parameter: true min: 0.0 max: 1.0;
-	float worker_proximity_radius <- 10.0 parameter: true;
-	float worker_socializing_radius <- 15.0 parameter: true;
+	int nb_workers <- 3;
+	float worker_trust_treshold <- 0.4;
+	float worker_proximity_radius <- 10.0;
+	float worker_socializing_radius <- 15.0;
 	float worker_max_energy <- 5.0;
 	float worker_strength <- 4.0;
+	int  worker_reward_behavior_interval <- 500;
+	int coins_required_to_escape <- 30;
 	
-	int fine_amount <- 2;
+	int nb_behaving_workers <- 1;
 	
-	int nb_guardians <- 0;
+	int nb_lying_workers <- 1;
+	
+	
+	int nb_guardians <- 2;
 	float guardian_perception_distance <- 30.0;
 	float guardian_speed <- 1.0;
 	float guardian_fov <- 60.0;
-	float maximum_distance_between_self_and_target_to_chase <- 100.0;
+	float maximum_distance_between_self_and_target_to_chase <- 75.0;
 	float guard_proximity_radius <- 10.0;
 	float guardian_max_energy <- 7.0;
 	float guardian_strength <- 3.0;
+	int fine_amount <- 2;
 	
-	int nb_lazy_guardians <- 0;
+	int nb_lazy_guardians <- 2;
 	float lazy_guardian_speed_percent_bonus <- -50.0;
 	float lazy_guardian_perception_distance_percent_bonus <- 45.0;
 	float lazy_guardian_fov <- 110.0;
 	float lazy_guardian_strength <- 1.0;
 	
-	int nb_fast_guardians <- 4;
+	int nb_fast_guardians <- 6;
 	float fast_guardian_speed_percent_bonus <- 40.0;
 	float fast_guardian_perception_distance_percent_bonus <- 20.0;
 	float fast_guardian_fov <- 30.0;
 	float fast_guardian_strength <- 2.0;
 	
-	
-	
-	
-	int coins_required_to_escape <- 30;
 	Safezone the_safezone;
 	
 	
 	string coinbox_at_location <- "coinbox_at_location";
 	string empty_coinbox_location <- "empty_coinbox_location";
+	string misbehaving_worker_location <- "misbehaving_worker_location";
 	
 	predicate coinbox_location <- new_predicate(coinbox_at_location);
 	predicate choose_coinbox <- new_predicate("choose a coinbox");
@@ -71,16 +74,10 @@ global {
 	
 	predicate stay_stunned <- new_predicate("stay_stunned");
 	predicate is_stunned <- new_predicate("is_stunned");
+
 	
-	
-	
-	
-	
-	
-	int precision <- 600 parameter: true;
 	
 	geometry shape <- square(env_length);
-	geometry obstacle_space <- nil;
 	geometry free_space <- copy(shape);
 	geometry free_space_without_safezones <- copy(free_space);
 	init {		
@@ -90,7 +87,6 @@ global {
 				shape <- circle(2+rnd(15));
 				free_space <- free_space - shape;
 				free_space_without_safezones <- free_space_without_safezones - shape;
-				obstacle_space <- obstacle_space + shape;
 			}
 		}
 		create Safezone number: 1 {
@@ -111,6 +107,12 @@ global {
 			location <- any_location_in(free_space);
 		}	
 		create Worker number: nb_workers {
+			location <- any_location_in(free_space);
+		}
+		create BehavedWorker number: nb_behaving_workers {
+			location <- any_location_in(free_space);
+		}
+		create LyingWorker number: nb_lying_workers {
 			location <- any_location_in(free_space);
 		}
 	}
@@ -140,30 +142,39 @@ global {
          	}
     	}
     }
-}
-
-species obstacle {
-	aspect default {
-		draw shape color: #gray ;
-		
+    
+    list<agent> get_all_instances(species<agent> spec) {
+		return spec.population + spec.subspecies accumulate(get_all_instances(each)) ;
 	}
+    
+    
+    reflex stop_simulation{
+    	list<Worker> workers <- get_all_instances(Worker);
+    	loop worker over:workers{
+    		if(worker.coins_safe >= coins_required_to_escape){
+    			do pause;
+    		}
+    	}
+    }
 }
 
 species BaseAgent skills: [moving] control: simple_bdi{
 	float perception_distance <- guardian_perception_distance;
 	float fov <- guardian_fov;
 	float speed <- guardian_speed;
-	rgb my_color <- rnd_color(255);
-	rgb chart_color <- rnd_color(255);
 	bool stunned <- false;
 	int stunned_cycles <- 0;
+	int to_be_stunned_for <- 0;
+	rgb my_color <- rnd_color(255);
+	rgb current_color <- my_color;
+	rgb chart_color <- rnd_color(255);
 	
 	
 	
 	geometry perceived_area;
 	point target ;
 	
-	rule belief:is_stunned new_desire: stay_stunned strength: 5.0;
+	rule belief:is_stunned new_desire: stay_stunned strength: 100.0;
 	
 	action goToPlace(point goTo){
 		do goto target: goTo.location ;
@@ -187,19 +198,19 @@ species BaseAgent skills: [moving] control: simple_bdi{
 		}
 	}
 	
-	action stunned(int seconds) {
-		write name + " i am doing stunned action";
-		stunned <- true;
+	action stunned(int cycles) {
+		to_be_stunned_for <- cycles;
+		stunned <- true;	
 		do add_belief(is_stunned);
 	}
 	
 	plan stay intention: stay_stunned  when: every(1#cycle) {
-		if(stunned_cycles <= 100){
+		if(stunned_cycles <= to_be_stunned_for){
 			stunned_cycles <- stunned_cycles + 1;
 		} else {
-			write "finish";
 			stunned <- false;
 			stunned_cycles <- 0;
+			to_be_stunned_for <- 0;
 			do remove_belief(is_stunned);
 			do remove_intention(stay_stunned,true);	
 		}
@@ -213,42 +224,41 @@ species BaseAgent skills: [moving] control: simple_bdi{
 	}
 	
 	aspect body {
-		draw circle(1) color: my_color;
+		draw circle(1) color: current_color;
 	}
 	
 	aspect perception {
 		if (perceived_area != nil) {
-			draw perceived_area color: my_color;
+			draw perceived_area color: current_color;
 			draw circle(1) at: target color: #pink;
 		}
+	}
+	aspect stunned {
+		if(stunned){
+			current_color <- #yellow;
+		} else {
+			current_color <- my_color;
+		}
+		
 	}
 }
 
 species BaseGuardian parent:BaseAgent {
 	float perception_distance <- guardian_perception_distance;
-	float base_speed <- guardian_speed;
-	float speed <- guardian_speed;
-	float energy <- 1.0;
-	float max_energy <- guardian_max_energy;
-	float fov <- guardian_fov;
-	rgb my_color <- #blue;
-	Worker worker_perceived <- nil;
 	float guard_proximity_rad <- guard_proximity_radius;
-	int fine <- fine_amount;
+	float fov <- guardian_fov;
+	float base_speed <- guardian_speed;
+	float speed <- base_speed;
+	float max_energy <- guardian_max_energy;
+	float energy <- 1.0;
 	float strength <- guardian_strength;
-	
-	
-	Worker worker_to_chase <- nil;
+	int fine <- fine_amount;
+	rgb my_color <- #blue;
 	
 	rule belief:misbehaving_worker new_desire:chase_worker strength: 2.0;
 	
-	
 	init {
 		do add_desire(patrol, 1.0);
-	}
-	
-	plan patrolling intention: patrol{
-		do moving_around;
 	}
 	
 	reflex update when: energy < max_energy {
@@ -259,82 +269,96 @@ species BaseGuardian parent:BaseAgent {
 		socialize;
 	}
 	
-	perceive target:Worker in: union([perceived_area,circle(guard_proximity_rad)]){
-		if(myself.perceived_area != nil){ 
-			myself.worker_to_chase <- self;
+	perceive target:agents of_generic_species Worker in: union([perceived_area,circle(guard_proximity_rad)]) when: every(1#cycle) {
+		if(myself.perceived_area != nil){
 			if( self.has_belief(has_coin_in_hand)){
+				Worker msb_w <- self;
 				ask myself{
+					do add_belief(new_predicate(misbehaving_worker_location, ['misbehaving_worker'::msb_w]));
 					do decideToChase;
 				}
-			}
+			} 
 		}
 	}
 	
 	action decideToChase{
 		do remove_intention(patrol, false);
 		do add_belief(misbehaving_worker);
-		do add_desire(predicate: share_info_about_misbehaving_worker, strength: 5.0);
+		do add_desire(predicate: share_info_about_misbehaving_worker, strength: 15.0);
+		do add_desire(predicate: chase_worker, strength: 10.0, todo: chase_worker);
+	}
+	
+	plan patrolling intention: patrol{
+		do moving_around;
 	}
 	
 	plan tell_guardians_about_misbehaving_worker intention: share_info_about_misbehaving_worker instantaneous: true{
-		if(self.worker_to_chase != nil){
-			list<BaseAgent> all_guardians <- list<BaseAgent>((social_link_base where (each.agent distance_to self.worker_to_chase < maximum_distance_between_self_and_target_to_chase)) collect each.agent);
-			Worker chase <- self.worker_to_chase;
-			ask all_guardians{
-				do remove_intention(patrol, false);
-				do add_belief(misbehaving_worker);
-				myself.worker_to_chase <- chase;
+		list<Worker> misbehaving_workers <- get_beliefs_with_name(misbehaving_worker_location) collect (get_predicate(mental_state (each)).values["misbehaving_worker"]);
+		if(empty(misbehaving_workers) = false){
+			list<BaseGuardian> all_guardians <- list<BaseGuardian>(social_link_base  collect each.agent);
+			loop worker over:misbehaving_workers {
+				list<BaseGuardian> close_enough_guardians <- list<BaseGuardian>( all_guardians where (each distance_to worker < maximum_distance_between_self_and_target_to_chase));
+				ask close_enough_guardians {
+					do remove_intention(patrol, false);
+					do add_belief(new_predicate(misbehaving_worker_location, ['misbehaving_worker'::worker]));
+					do add_belief(misbehaving_worker);
+				}
 			}
 		}
 		do remove_intention(share_info_about_misbehaving_worker, true);
 	}
 	
 	plan chaseWorker intention: chase_worker {
-		if(self.worker_to_chase != nil and self.worker_to_chase.has_belief(has_coin_in_hand)){	
-			do goToPlace goTo: self.worker_to_chase.location;
-			if(energy > 0.0){
-				speed <- base_speed + base_speed * (energy * 0.07);    //  49.5% max bonus speed
-				energy <- energy - 0.02;			
-			}
-			if(self.location = self.worker_to_chase.location ){	
-				do attack_worker;
-				self.worker_to_chase <- nil;
-			}
-		} else {
+		list<Worker> misbehaving_workers <- get_beliefs_with_name(misbehaving_worker_location) collect (get_predicate(mental_state (each)).values["misbehaving_worker"]);	
+		if(empty(misbehaving_workers)){
 			do remove_intention(chase_worker, true);
 			do add_intention(patrol);
-			self.speed <- base_speed;
+		} else {
+			Worker target_worker <- (misbehaving_workers with_min_of(each distance_to self));
+			if(target_worker.has_belief(has_coin_in_hand)){
+				do goToPlace goTo: target_worker.location;
+				if(energy > 0.0){
+					speed <- base_speed + base_speed * (energy * 0.07);    //  49.5% max bonus speed
+					energy <- energy - 0.02;			
+				}
+				if(distance_to(self.location, target_worker.location) < 0.5 ){	
+					do attack_worker(target_worker);
+					do remove_intention(chase_worker, true);
+					do remove_belief(new_predicate(misbehaving_worker_location, ["misbehaving_worker"::target_worker]));	
+				}
+			} else {
+				speed <- base_speed;
+				do remove_belief(new_predicate(misbehaving_worker_location, ["misbehaving_worker"::target_worker]));
+			}	
 		}
 	}
 
-	action attack_worker {
-		float my_attack_score <- energy + strength + base_speed;
-		int my_RNG <- rnd(-25,25);
-		my_attack_score <- my_attack_score + (abs(my_attack_score ) * my_RNG)/100.0;
-		
-		Worker worker <- worker_to_chase;
-		float worker_attack_score <- worker.energy + worker.strength + worker.base_speed;
+	action attack_worker(Worker worker_target) {
+		Worker worker <- worker_target;
+		int my_RNG <- rnd(15,30);
 		int worker_RNG <- rnd(-25,25);
-		worker_attack_score <- worker_attack_score + (abs(worker_attack_score ) * worker_RNG)/100.0;
 		
-		write "My attack score is: " + my_attack_score + " worker sore: " + worker_attack_score;
+		float my_attack_score <- energy + strength + base_speed;
+		my_attack_score <- my_attack_score + (abs(my_attack_score ) * my_RNG)/100.0;
+
+		float worker_attack_score <- worker.energy + worker.strength + worker.base_speed;
+		worker_attack_score <- worker_attack_score + (abs(worker_attack_score ) * worker_RNG)/100.0;
+
 		float difference <- my_attack_score - worker_attack_score;
 		
 		if(difference >= 0){
-			write "GUARDIAN WINS THE FIGHT";
-			ask worker_to_chase{
+			ask worker{
 				coins_in_hand <- 0;
 				do remove_belief(has_coin_in_hand);
 				coins_safe <- coins_safe - myself.fine;		
-				do stunned(5);		
+				do stunned(25 * int(abs(difference) + 1));		
 			}
 		} else {
-			write "WORKER WINS THE FIGHT AND GETS AWAY";
-			// rng to find a coin in guardian's pockets
 			ask self {
-				do stunned(5);
+				do stunned(25 * int(abs(difference) + 1));
 			}
 		}
+		self.speed <- base_speed;	
 	}
 	
 	aspect proximity_radius {
@@ -357,21 +381,19 @@ species FastGuardian parent: BaseGuardian {
 }
 
 species Worker parent: BaseAgent {
+	int cycles_left_for_reward <- worker_reward_behavior_interval;
 	int coins_needed_to_escape <- coins_required_to_escape;
-	float energy <- 1.0;
-	float base_speed <- 1.0;
-	float max_energy <- worker_max_energy;
-	Worker worker_perceived <- nil;
+	float worker_socializing_rad <- worker_socializing_radius;
+	float worker_proximity_rad <- worker_proximity_radius;
 	int coins_in_hand <- 0;
 	int coins_safe <- 0;
-	rgb my_color <- #red;
-	float worker_proximity_rad <- worker_proximity_radius;
-	float worker_socializing_rad <- worker_socializing_radius;
+	float max_energy <- worker_max_energy;
+	float energy <- 1.0;
+	float base_speed <- 1.0;
 	float strength <- worker_strength;
-	
+	rgb my_color <- #red;
 	
 	bool use_social_architecture <- true;
-	bool use_emotions_architecture <- true;
 
 	rule belief: coinbox_location new_desire: get_coins strength: 2.0;
 	rule belief: has_coin_in_hand new_desire: store_coins strength: 3.0;	
@@ -384,6 +406,15 @@ species Worker parent: BaseAgent {
 		energy <- energy + 0.015;  // +1 energy every 67 steps 			
 	}
 	
+	reflex reward_behavior when: cycles_left_for_reward = 0{
+		coins_safe <- coins_safe + 1;
+		cycles_left_for_reward <- worker_reward_behavior_interval;
+	}
+	
+	reflex update_reward_cycles_left when:every(1#cycle) {
+		cycles_left_for_reward <- cycles_left_for_reward - 1;
+	}
+	
 	perceive target: agents of_generic_species BaseGuardian in:worker_proximity_rad  when: has_belief(has_coin_in_hand) {
 		if(myself.energy > 0.0){
 			myself.speed <- myself.base_speed + myself.base_speed*(myself.energy * 0.07);    //  35% max bonus speed
@@ -391,7 +422,7 @@ species Worker parent: BaseAgent {
 		} 
 	}	
 	
-	perceive target: CoinBox in:perceived_area when: every(1#cycle){
+	perceive target: CoinBox in:union([perceived_area,circle(worker_proximity_rad)]) when: every(1#cycle){
 		if(myself.perceived_area != nil){
 			focus id: coinbox_at_location var: location;
 			ask myself{
@@ -401,11 +432,10 @@ species Worker parent: BaseAgent {
 		}
 	}
 	
-	perceive target: Worker in: worker_socializing_rad {
+	perceive target: agents of_generic_species Worker in: worker_socializing_rad {
 		if(self != myself){
-			myself.worker_perceived <- self;
 			socialize liking:0.1;
-			do change_trust(worker_perceived, 0.009);	
+			do change_trust(self, 0.009);	
 		}
 	}
 	
@@ -458,6 +488,7 @@ species Worker parent: BaseAgent {
 				do remove_belief(has_coin_in_hand);
 				do remove_intention(store_coins, true);
 				coins_safe <- coins_safe + coins_in_hand;	
+				coins_in_hand <- 0;
 				self.speed <- base_speed;
 			}
 		} else {
@@ -490,6 +521,32 @@ species Worker parent: BaseAgent {
 	}
 }
 
+species BehavedWorker parent: Worker {
+	rgb my_color <- #green;
+	plan getting_coins intention: get_coins{
+		do moving_around;
+	}
+}
+
+species LyingWorker parent: Worker {
+	rgb my_color <- #purple;
+	
+	plan share_information_to_friends intention: share_coinbox_information instantaneous: true{
+		do remove_intention(share_coinbox_information, true);
+	}
+	
+	reflex tell_lies when: every(100#cycles){
+		float chance <- rnd(0.0, 1.0);
+		if(chance <= 0.30){
+			list<Worker> workers_i_know <- list<Worker>(social_link_base collect each.agent);
+			ask workers_i_know{
+				do add_belief(new_predicate(coinbox_at_location, ["location_value"::myself.location]));
+				do remove_intention(find_coins, false);
+			}
+		}
+	}
+}
+
 species socialLinkRepresentation{
     Worker origin;
     agent destination;
@@ -518,9 +575,15 @@ species socialLinkRepresentation{
     }
 }
 
+species obstacle {
+	aspect default {
+		draw shape color: #gray ;
+	}
+}
+
 species CoinBox  {
-//	int coins <- rnd(1,max_coins_in_coinbox);
-	int coins <- 1;
+	int coins <- rnd(1,max_coins_in_coinbox);
+	image_file my_icon <- image_file('../includes/box-full.png'); 
 	
 	reflex update when: every(1#cycle){
 		if(coins = 0){
@@ -536,40 +599,70 @@ species CoinBox  {
 	}
 	
 	aspect default{
-		draw square(5) color: #green; 
+		draw my_icon size: 5 color: #green; 
 	}
 }
 
 
 species Safezone {
 	geometry shape <- square(30);
+	image_file my_icon <- image_file('../includes/safe-zone.png'); 
 	
 	aspect default{
-		draw shape color: #green; 
+		draw my_icon size: 30 color: #green; 
 	}
 }
 
 experiment PrisonPatrollingGame type: gui {
-	parameter "Initial number of guardians: " var: nb_guardians min: 0 max: 50 category: "Base Guardian";
-	parameter "Base Perceived Distance: " var: guardian_perception_distance min: 10.0 max: 70.0 category: "Base Guardian";
-	parameter "Base Speed: " var: guardian_speed min: 0.7 max: 1.5 category: "Base Guardian";
-	parameter "Field of View: " var: guardian_fov min: 30.0 max: 150.0 category: "Base Guardian";
+	parameter "Number of obstacles" var: nb_obstacles min: 0 max: 50;
+	parameter "Number of coinboxes" var: nb_coinboxes min: 0 max: 10;
+	parameter "Maximum number of coins in a coinbox" var: max_coins_in_coinbox min: 1 max: 5;
 	
-	parameter "(Lazy) Initial number of guardians: " var: nb_lazy_guardians min: 0 max: 50 category: "Lazy Guardian";
-	parameter "(Lazy) Perceived Distance Bonus %: " var: lazy_guardian_perception_distance_percent_bonus min: -90.0 max: 200.0 category: "Lazy Guardian";
-	parameter "(Lazy) Speed Bonus %: " var: lazy_guardian_speed_percent_bonus min: -90.0 max: 200.0 category: "Lazy Guardian";
-	parameter "(Lazy) Field of View: " var: lazy_guardian_fov min: 30.0 max: 150.0 category: "Lazy Guardian";
+	parameter "Number of Workers" var: nb_workers min: 0 max: 10 category: "Worker";
+	parameter "Worker Trust Treshold" var: worker_trust_treshold min: 0.0 max: 1.0 category: "Worker";
+	parameter "Worker Proximity Radius" var: worker_proximity_radius min: 1.0 max: 20.0 category: "Worker";
+	parameter "Worker Socializing Radius" var: worker_socializing_radius min: 1.0 max: 20.0 category: "Worker";
+	parameter "Worker Max Energy" var: worker_max_energy min: 1.0 max: 10.0 category: "Worker";
+	parameter "Worker Strength" var: worker_strength min: 1.0 max: 10.0 category: "Worker";
+	parameter "Reward After Cycles" var: worker_reward_behavior_interval min: 100 max: 1000 category: "Worker";
+	parameter "Coins Required to Escape" var: coins_required_to_escape min: 1 max: 50 category: "Worker";
 	
-	parameter "(Fast) Initial number of guardians: " var:nb_fast_guardians min: 0 max: 50 category: "Fast Guardian";
-	parameter "(Fast) Perceived Distance Bonus %: " var: fast_guardian_perception_distance_percent_bonus min: -90.0 max: 200.0 category: "Fast Guardian";
-	parameter "(Fast) Speed Bonus %: " var: fast_guardian_speed_percent_bonus min: -90.0 max: 200.0 category: "Fast Guardian";
-	parameter "(Fast) Field of View: " var: fast_guardian_fov min: 30.0 max: 150.0 category: "Fast Guardian";
+	
+	parameter "(Behaving) Number of workers" var: nb_behaving_workers min: 0 max: 10 category: "Behaving Worker";
+	
+	
+	parameter "(Lying) Number of workers" var: nb_lying_workers min: 0 max: 10 category: "Lying Worker";
+	
+	
+	parameter "Number of guardians" var: nb_guardians min: 0 max: 50 category: "Base Guardian";
+	parameter "Base Perceived Distance" var: guardian_perception_distance min: 10.0 max: 70.0 category: "Base Guardian";
+	parameter "Base Speed" var: guardian_speed min: 0.7 max: 1.5 category: "Base Guardian";
+	parameter "Field of View" var: guardian_fov min: 30.0 max: 120.0 category: "Base Guardian";
+	parameter "Max Distance to Chase" var: maximum_distance_between_self_and_target_to_chase min: 10.0 max: 100.0 category: "Base Guardian";
+	parameter "Proximity Radius" var: guard_proximity_radius min: 1.0 max: 20.0 category: "Base Guardian";
+	parameter "Max Energy" var: guardian_max_energy min: 1.0 max: 10.0 category: "Base Guardian";
+	parameter "Strength" var: guardian_strength min: 1.0 max: 10.0 category: "Base Guardian";
+	parameter "Fine" var: fine_amount min: 1 max: 5 category: "Base Guardian";
+ 	
+	
+	parameter "(Lazy) Number of guardians" var: nb_lazy_guardians min: 0 max: 50 category: "Lazy Guardian";
+	parameter "(Lazy) Perceived Distance Bonus %" var: lazy_guardian_perception_distance_percent_bonus min: -90.0 max: 200.0 category: "Lazy Guardian";
+	parameter "(Lazy) Speed Bonus %" var: lazy_guardian_speed_percent_bonus min: -90.0 max: 200.0 category: "Lazy Guardian";
+	parameter "(Lazy) Field of View" var: lazy_guardian_fov min: 30.0 max: 120.0 category: "Lazy Guardian";
+	parameter "(Lazy) Strength" var: lazy_guardian_strength min: 1.0 max: 10.0 category: "Lazy Guardian";
+	
+	
+	parameter "(Fast) Number of guardians" var:nb_fast_guardians min: 0 max: 50 category: "Fast Guardian";
+	parameter "(Fast) Perceived Distance Bonus %" var: fast_guardian_perception_distance_percent_bonus min: -90.0 max: 200.0 category: "Fast Guardian";
+	parameter "(Fast) Speed Bonus %" var: fast_guardian_speed_percent_bonus min: -90.0 max: 200.0 category: "Fast Guardian";
+	parameter "(Fast) Field of View" var: fast_guardian_fov min: 30.0 max: 120.0 category: "Fast Guardian";
+	parameter "(Fast) Strength" var: fast_guardian_strength min: 1.0 max: 10.0 category: "Fast Guardian";
 	
 	float minimum_cycle_duration <- 0.05;
 	output {
 		display info {
 			chart "Safe coins" type: series {
-				datalist legend: Worker accumulate each.name value: Worker accumulate each.coins_safe color:Worker accumulate each.chart_color;
+				datalist legend: agents of_generic_species Worker accumulate each.name value: agents of_generic_species Worker accumulate each.coins_safe color:agents of_generic_species Worker accumulate each.chart_color;
 			}
 		}
 		
@@ -582,22 +675,36 @@ experiment PrisonPatrollingGame type: gui {
 			species BaseGuardian aspect: perception transparency: 0.6;
 			species BaseGuardian aspect: body;
 			species BaseGuardian aspect: proximity_radius;
+			species BaseGuardian aspect: stunned;
+			
 			
 			species LazyGuardian aspect: perception transparency: 0.6;
 			species LazyGuardian aspect: body;
 			species LazyGuardian aspect: proximity_radius;
+			species LazyGuardian aspect: stunned;
 			
 			species FastGuardian aspect: perception transparency: 0.6;
 			species FastGuardian aspect: body;
 			species FastGuardian aspect: proximity_radius;
+			species FastGuardian aspect: stunned;
 			
 			species Worker aspect: perception transparency: 0.6;
 			species Worker aspect: body;
 			species Worker aspect: proximity_radius;
+			species Worker aspect: stunned;
 			
-			species Safezone transparency: 0.8;
+			species BehavedWorker aspect: perception transparency: 0.6;
+			species BehavedWorker aspect: body;
+			species BehavedWorker aspect: proximity_radius;
+			species BehavedWorker aspect: stunned;
+			
+			species LyingWorker aspect: perception transparency: 0.6;
+			species LyingWorker aspect: body;
+			species LyingWorker aspect: proximity_radius;
+			species LyingWorker aspect: stunned;
+			
+			species Safezone transparency: 0.5;
 			species CoinBox;	
 		}
-		
 	}
 }
