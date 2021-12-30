@@ -10,10 +10,13 @@ model PrisonPatrollingGame
 
 global {
 	int env_length <- 200;
+	int current_cycle <- 0;
 	
 	int nb_obstacles <- 15;
 	int nb_coinboxes <- 20;
 	int max_coins_in_coinbox <- 3;
+	int total_guardians_stunned <- 0;
+	int total_workers_stunned <- 0;
 	
 	int nb_workers <- 3;
 	float worker_trust_treshold <- 0.4;
@@ -22,7 +25,7 @@ global {
 	float worker_max_energy <- 5.0;
 	float worker_strength <- 4.0;
 	int  worker_reward_behavior_interval <- 500;
-	int coins_required_to_escape <- 30;
+	int coins_required_to_escape <- 10;
 	
 	int nb_behaving_workers <- 1;
 	
@@ -143,6 +146,10 @@ global {
     	}
     }
     
+    reflex update_current_cycle when: every(1#cycle){
+    	current_cycle <- current_cycle + 1;
+    }
+    
     list<agent> get_all_instances(species<agent> spec) {
 		return spec.population + spec.subspecies accumulate(get_all_instances(each)) ;
 	}
@@ -168,6 +175,8 @@ species BaseAgent skills: [moving] control: simple_bdi{
 	rgb my_color <- rnd_color(255);
 	rgb current_color <- my_color;
 	rgb chart_color <- rnd_color(255);
+	float energy <- 1.0;
+	float avg_energy <- 1.0;
 	
 	
 	
@@ -223,6 +232,10 @@ species BaseAgent skills: [moving] control: simple_bdi{
 		}
 	}
 	
+	reflex compute_average_energy when:every(1#cycle){
+		avg_energy <- avg_energy + (energy - avg_energy)/current_cycle;
+	}
+	
 	aspect body {
 		draw circle(1) color: current_color;
 	}
@@ -254,6 +267,8 @@ species BaseGuardian parent:BaseAgent {
 	float strength <- guardian_strength;
 	int fine <- fine_amount;
 	rgb my_color <- #blue;
+	int nb_won_fights <- 0;
+	int nb_lost_fights <- 0;
 	
 	rule belief:misbehaving_worker new_desire:chase_worker strength: 2.0;
 	
@@ -319,7 +334,7 @@ species BaseGuardian parent:BaseAgent {
 				do goToPlace goTo: target_worker.location;
 				if(energy > 0.0){
 					speed <- base_speed + base_speed * (energy * 0.07);    //  49.5% max bonus speed
-					energy <- energy - 0.02;			
+					energy <- energy - 0.05;			
 				}
 				if(distance_to(self.location, target_worker.location) < 0.5 ){	
 					do attack_worker(target_worker);
@@ -335,7 +350,7 @@ species BaseGuardian parent:BaseAgent {
 
 	action attack_worker(Worker worker_target) {
 		Worker worker <- worker_target;
-		int my_RNG <- rnd(15,30);
+		int my_RNG <- rnd(0,25);
 		int worker_RNG <- rnd(-25,25);
 		
 		float my_attack_score <- energy + strength + base_speed;
@@ -351,12 +366,17 @@ species BaseGuardian parent:BaseAgent {
 				coins_in_hand <- 0;
 				do remove_belief(has_coin_in_hand);
 				coins_safe <- coins_safe - myself.fine;		
+				cycles_left_for_reward <- worker_reward_behavior_interval;
 				do stunned(25 * int(abs(difference) + 1));		
 			}
+			nb_won_fights <- nb_won_fights + 1;
+			total_workers_stunned <- total_workers_stunned + 1;
 		} else {
 			ask self {
 				do stunned(25 * int(abs(difference) + 1));
 			}
+			total_guardians_stunned <- total_guardians_stunned + 1;
+			nb_lost_fights <- nb_lost_fights + 1;
 		}
 		self.speed <- base_speed;	
 	}
@@ -392,6 +412,8 @@ species Worker parent: BaseAgent {
 	float base_speed <- 1.0;
 	float strength <- worker_strength;
 	rgb my_color <- #red;
+	int nb_just_escaped <- 0;
+	bool is_being_chased <- false;
 	
 	bool use_social_architecture <- true;
 
@@ -418,7 +440,8 @@ species Worker parent: BaseAgent {
 	perceive target: agents of_generic_species BaseGuardian in:worker_proximity_rad  when: has_belief(has_coin_in_hand) {
 		if(myself.energy > 0.0){
 			myself.speed <- myself.base_speed + myself.base_speed*(myself.energy * 0.07);    //  35% max bonus speed
-			myself.energy <- myself.energy - 0.02;		
+			myself.energy <- myself.energy - 0.03;
+			myself.is_being_chased <- true;
 		} 
 	}	
 	
@@ -490,6 +513,10 @@ species Worker parent: BaseAgent {
 				coins_safe <- coins_safe + coins_in_hand;	
 				coins_in_hand <- 0;
 				self.speed <- base_speed;
+				if(is_being_chased){
+					nb_just_escaped <- nb_just_escaped + 1;
+					is_being_chased <- false;
+				}
 			}
 		} else {
 			do remove_intention(store_coins, true);
@@ -659,16 +686,66 @@ experiment PrisonPatrollingGame type: gui {
 	parameter "(Fast) Strength" var: fast_guardian_strength min: 1.0 max: 10.0 category: "Fast Guardian";
 	
 	float minimum_cycle_duration <- 0.05;
-	output {
-		display info {
-			chart "Safe coins" type: series {
-				datalist legend: agents of_generic_species Worker accumulate each.name value: agents of_generic_species Worker accumulate each.coins_safe color:agents of_generic_species Worker accumulate each.chart_color;
-			}
-		}
-		
+	output {		
 		display socialLinks {
         	species socialLinkRepresentation aspect: base;
     	}
+    	
+    	display Guardian_information refresh: every(5#cycles) {
+			chart "Energy" type: histogram background: #lightgray size: {0.5,0.5} position: {0, 0.5} {
+				loop guardian over:agents of_generic_species BaseGuardian {
+					data guardian.name value: guardian.energy color: guardian.chart_color;
+				}
+			}
+			chart "Average Energy" type: histogram background: #lightgray size: {0.5,0.5} position: {0.5, 0.5} {				
+				loop guardian over:agents of_generic_species BaseGuardian {
+					data guardian.name value: guardian.avg_energy color: guardian.chart_color;
+				}
+			}
+			chart "Fights Won" type: histogram background: #lightgray size: {0.5,0.5} position: {0, 0} {				
+				loop guardian over:agents of_generic_species BaseGuardian {
+					data guardian.name value: guardian.nb_won_fights color: guardian.chart_color;
+				}
+			}
+			chart "Fights Lost" type: histogram background: #lightgray size: {0.5,0.5} position: {0.5, 0} {				
+				loop guardian over:agents of_generic_species BaseGuardian {
+					data guardian.name value: guardian.nb_lost_fights color: guardian.chart_color;
+				}
+			}
+		}
+		
+		display Worker_information refresh: every(5#cycles) { 
+			chart "Coins safe" type: histogram background: #lightgray size: {0.5,0.5} position: {0, 0} {
+				loop worker over:agents of_generic_species Worker {
+					data worker.name value: worker.coins_safe color: worker.chart_color;
+				}
+			}
+			chart "Times just escaped" type: histogram background: #lightgray size: {0.5,0.5} position: {0.5, 0} {
+				loop worker over:agents of_generic_species Worker {
+					data worker.name value: worker.nb_just_escaped color: worker.chart_color;
+				}
+			}
+			chart "Energy" type: histogram background: #lightgray size: {0.5,0.5} position: {0, 0.5} {
+				loop worker over:agents of_generic_species Worker {
+					data worker.name value: worker.energy color: worker.chart_color;
+				}
+			}
+			chart "Average Energy" type: histogram background: #lightgray size: {0.5,0.5} position: {0.5, 0.5} {				
+				loop worker over:agents of_generic_species Worker {
+					data worker.name value: worker.avg_energy color: worker.chart_color;
+				}
+			}
+		}
+		
+		display General_information refresh: every(5#cycles) { 
+			chart "Safe coins" type: series size: {1.0, 0.5} position: {0,0} {
+				datalist legend: agents of_generic_species Worker accumulate each.name value: agents of_generic_species Worker accumulate each.coins_safe color:agents of_generic_species Worker accumulate each.chart_color;
+			}
+			chart "Stunned agents" type: histogram background: #lightgray size: {1.0,0.5} position: {0, 0.5} {
+				data "Workers" value: total_workers_stunned;
+				data "Guardians" value: total_guardians_stunned;
+			}
+		}
 		
 		display view synchronized: true {
 			species obstacle;
