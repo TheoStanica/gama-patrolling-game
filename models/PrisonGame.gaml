@@ -17,15 +17,24 @@ global {
 	int max_coins_in_coinbox <- 3;
 	int total_guardians_stunned <- 0;
 	int total_workers_stunned <- 0;
+	int stunned_w01 <- 0;
+	int stunned_w02 <- 0;
+	int stunned_w03 <- 0;
+	int stunned_w04 <- 0;
+	int stunned_g01 <- 0;
+	int stunned_g02 <- 0;
+	int stunned_g03 <- 0;
+	int stunned_g04 <- 0;
+	 
 	
 	int nb_workers <- 3;
 	float worker_trust_treshold <- 0.4;
 	float worker_proximity_radius <- 10.0;
 	float worker_socializing_radius <- 15.0;
 	float worker_max_energy <- 5.0;
-	float worker_strength <- 4.0;
+	float worker_strength <- 3.3;
 	int  worker_reward_behavior_interval <- 500;
-	int coins_required_to_escape <- 10;
+	int coins_required_to_escape <- 20;
 	
 	int nb_behaving_workers <- 1;
 	
@@ -152,6 +161,17 @@ global {
     
     list<agent> get_all_instances(species<agent> spec) {
 		return spec.population + spec.subspecies accumulate(get_all_instances(each)) ;
+	}
+	
+	float avg_guardians_energy <- 1.0;
+	int total_nb_guardians <- nb_guardians + nb_lazy_guardians + nb_fast_guardians;
+	reflex update_avg_guardians_energy when: every(1#cycle){
+		float added_g_energy <- 0.0;
+		list<BaseGuardian> guardians <- get_all_instances(BaseGuardian);
+		loop guardian over:guardians{
+    		added_g_energy <- added_g_energy + guardian.energy;
+    	}
+    	avg_guardians_energy <- added_g_energy / total_nb_guardians;
 	}
     
     
@@ -334,7 +354,7 @@ species BaseGuardian parent:BaseAgent {
 				do goToPlace goTo: target_worker.location;
 				if(energy > 0.0){
 					speed <- base_speed + base_speed * (energy * 0.07);    //  49.5% max bonus speed
-					energy <- energy - 0.05;			
+					energy <- energy - 0.07;			
 				}
 				if(distance_to(self.location, target_worker.location) < 0.5 ){	
 					do attack_worker(target_worker);
@@ -350,15 +370,15 @@ species BaseGuardian parent:BaseAgent {
 
 	action attack_worker(Worker worker_target) {
 		Worker worker <- worker_target;
-		int my_RNG <- rnd(0,25);
-		int worker_RNG <- rnd(-25,25);
+		int my_RNG <- rnd(-15,15);
+		int worker_RNG <- rnd(-15,15);
 		
 		float my_attack_score <- energy + strength + base_speed;
 		my_attack_score <- my_attack_score + (abs(my_attack_score ) * my_RNG)/100.0;
 
 		float worker_attack_score <- worker.energy + worker.strength + worker.base_speed;
 		worker_attack_score <- worker_attack_score + (abs(worker_attack_score ) * worker_RNG)/100.0;
-
+		
 		float difference <- my_attack_score - worker_attack_score;
 		
 		if(difference >= 0){
@@ -371,12 +391,33 @@ species BaseGuardian parent:BaseAgent {
 			}
 			nb_won_fights <- nb_won_fights + 1;
 			total_workers_stunned <- total_workers_stunned + 1;
+			
+			
+			if(avg_guardians_energy <= 1.75){
+				stunned_w01 <- stunned_w01 + 1;
+			} else if(avg_guardians_energy <= 3.5){
+				stunned_w02 <- stunned_w02 + 1;
+			} else if(avg_guardians_energy <= 5.25) {
+				stunned_w03 <- stunned_w03 + 1;
+			} else {
+				stunned_w04 <- stunned_w04 + 1;
+			}
+		
 		} else {
 			ask self {
 				do stunned(25 * int(abs(difference) + 1));
 			}
 			total_guardians_stunned <- total_guardians_stunned + 1;
 			nb_lost_fights <- nb_lost_fights + 1;
+			if(avg_guardians_energy <= 1.75){
+				stunned_g01 <- stunned_g01 + 1;
+			} else if(avg_guardians_energy <= 3.5){
+				stunned_g02 <- stunned_g02 + 1;
+			} else if(avg_guardians_energy <= 5.25) {
+				stunned_g03 <- stunned_g03 + 1;
+			} else {
+				stunned_g04 <- stunned_g04 + 1;
+			}
 		}
 		self.speed <- base_speed;	
 	}
@@ -440,7 +481,7 @@ species Worker parent: BaseAgent {
 	perceive target: agents of_generic_species BaseGuardian in:worker_proximity_rad  when: has_belief(has_coin_in_hand) {
 		if(myself.energy > 0.0){
 			myself.speed <- myself.base_speed + myself.base_speed*(myself.energy * 0.07);    //  35% max bonus speed
-			myself.energy <- myself.energy - 0.03;
+			myself.energy <- myself.energy - 0.07;
 			myself.is_being_chased <- true;
 		} 
 	}	
@@ -741,10 +782,34 @@ experiment PrisonPatrollingGame type: gui {
 			chart "Safe coins" type: series size: {1.0, 0.5} position: {0,0} {
 				datalist legend: agents of_generic_species Worker accumulate each.name value: agents of_generic_species Worker accumulate each.coins_safe color:agents of_generic_species Worker accumulate each.chart_color;
 			}
-			chart "Stunned agents" type: histogram background: #lightgray size: {1.0,0.5} position: {0, 0.5} {
-				data "Workers" value: total_workers_stunned;
+			chart "Stunned agents" type: histogram background: #lightgray size: {0.33,0.5} position: {0, 0.5} {
+				data "Workers" value: total_workers_stunned use_second_y_axis: true;
 				data "Guardians" value: total_guardians_stunned;
 			}
+			chart "Worker Stunned/Average Guardian Energy Distribution" type: histogram background: #lightgray size: {0.33,0.5} position: {0.33, 0.5} {
+				data "[0,1.75)" value: stunned_w01 color: #red;
+				data "[1.75,3.5)" value:stunned_w02 color: #red;
+				data "[3.5,5.25)" value:stunned_w03 color: #red;
+				data "[5.25,7]" value:stunned_w04 color: #red;
+			}
+			chart "Guardians Stunned/Average Guardian Energy Distribution" type: histogram background: #lightgray size: {0.33,0.5} position: {0.66, 0.5}  {
+				data "[0,1.75)" value: stunned_g01 color: #blue;
+				data "[1.75,3.5)" value:stunned_g02 color: #blue;
+				data "[3.5,5.25)" value:stunned_g03 color: #blue;
+				data "[5.25,7]" value:stunned_g04 color: #blue;
+			}
+			
+		}
+		
+		display Energy_Fights_Evolution refresh: every(5#cycle){
+			chart "Average Energy" type: series  size: {1.0,0.5} position: {0,0}{				
+				data legend: "Guardians average energy" value: avg_guardians_energy color: #green;
+			}
+			chart "Stunned Agents " type: series  size: {1.0,0.5} position: {0,0.5}{				
+				data legend: "Number of stunned Guardians" value: total_guardians_stunned color: #blue;
+				data legend: "Number of sutnned Workers" value: total_workers_stunned color: #red;
+			}
+			
 		}
 		
 		display view synchronized: true {
